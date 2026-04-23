@@ -1,0 +1,9 @@
+langchain>=1.2.6
+langchain-community>=0.4.1
+langchain-ollama>=1.0.1
+langfuse>=3.12.0
+langgraph>=1.0.6
+llama-index>=0.14.13
+llama-index-embeddings-ollama>=0.8.6
+llama-index-llms-ollama>=0.9.1
+python-dotenv>=1.2.1
