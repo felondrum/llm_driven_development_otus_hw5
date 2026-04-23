@@ -1,0 +1,7 @@
+README.md
+pyproject.toml
+llm_driven_development_otus_hw5.egg-info/PKG-INFO
+llm_driven_development_otus_hw5.egg-info/SOURCES.txt
+llm_driven_development_otus_hw5.egg-info/dependency_links.txt
+llm_driven_development_otus_hw5.egg-info/requires.txt
+llm_driven_development_otus_hw5.egg-info/top_level.txt
