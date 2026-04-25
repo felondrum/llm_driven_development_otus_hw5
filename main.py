@@ -1,6 +1,8 @@
-def main():
-    print("Hello from llm-driven-development-otus-hw5!")
-
+"""
+Точка входа в приложение мониторинга и анализа производительности LLM.
+Запускает консольный чат-бот с RAG системой.
+"""
+from chatbot import main
 
 if __name__ == "__main__":
     main()
