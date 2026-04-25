@@ -1,18 +1,41 @@
 ```
-# Environment variables
+# Compiled Python files
+*.pyc
+__pycache__/
+
+# Dependencies
+.venv/
+venv/
+node_modules/
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+
+# Environment
 .env
 .env.local
-.env.*
+*.env.*
 
-# Python
-__pycache__/
-*.pyc
+# Editors
+.vscode/
+.idea/
+
+# Coverage reports
+.coverage
+coverage/
+htmlcov/
+
+# Python specific
 *.pyo
 *.pyd
 .Python
-venv/
-.venv/
-.env
-.env.local
-.env.*
+*.so
+*.egg-info/
+
+# Build directories
+build/
+dist/
+*.egg
 ```

@@ -210,23 +210,60 @@ class RAGSystem:
 
         return answer, input_tokens, output_tokens, trace_id
 
-    def query(self, user_query: str, trace_id: str = None) -> Dict[str, Any]:
+    def query(self, user_query: str, trace_id: str = None, rag_span_id: str = None) -> Dict[str, Any]:
         """
         Полный цикл RAG: поиск + генерация ответа.
         
         Args:
             user_query: Запрос пользователя
+            trace_id: ID trace для мониторинга
+            rag_span_id: ID parent span для вложенных операций
             
         Returns:
             Словарь с ответом и метаданными
         """
         start_time = time.time()
+        
+        # Span для поиска документов (если есть trace)
+        search_span = None
+        if trace_id:
+            search_span = monitoring.create_span(
+                trace_id=trace_id,
+                name="document_search",
+                parent_observation_id=rag_span_id,
+                input_data={"query": user_query},
+            )
 
         # Поиск документов
         retrieved_docs = self.search(user_query)
+        
+        # Завершить search span
+        if search_span:
+            search_span.end(output={
+                "num_documents_found": len(retrieved_docs),
+                "avg_relevance_score": sum(d.score for d in retrieved_docs) / len(retrieved_docs) if retrieved_docs else 0.0,
+            })
+        
+        # Span для генерации ответа
+        generation_span = None
+        if trace_id:
+            generation_span = monitoring.create_span(
+                trace_id=trace_id,
+                name="answer_generation",
+                parent_observation_id=rag_span_id,
+                input_data={"query": user_query, "context_docs_count": len(retrieved_docs)},
+            )
 
         # Генерация ответа
-        answer, input_tokens, output_tokens, trace_id = self.generate_answer(user_query, retrieved_docs, trace_id)
+        answer, input_tokens, output_tokens, _ = self.generate_answer(user_query, retrieved_docs, trace_id)
+        
+        # Завершить generation span
+        if generation_span:
+            generation_span.end(output={
+                "answer_preview": answer[:100],
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+            })
 
         end_time = time.time()
         total_duration_ms = (end_time - start_time) * 1000
