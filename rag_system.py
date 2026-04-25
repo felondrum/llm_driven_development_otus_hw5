@@ -239,10 +239,11 @@ class RAGSystem:
         
         # Завершить search span
         if search_span:
-            search_span.end(output={
+            search_span.update(output={
                 "num_documents_found": len(retrieved_docs),
                 "avg_relevance_score": sum(d.score for d in retrieved_docs) / len(retrieved_docs) if retrieved_docs else 0.0,
             })
+            search_span.end()
         
         # Span для генерации ответа
         generation_span = None
@@ -259,11 +260,12 @@ class RAGSystem:
         
         # Завершить generation span
         if generation_span:
-            generation_span.end(output={
+            generation_span.update(output={
                 "answer_preview": answer[:100],
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
             })
+            generation_span.end()
 
         end_time = time.time()
         total_duration_ms = (end_time - start_time) * 1000

@@ -95,11 +95,12 @@ class ChatBot:
             
             # Завершить RAG span с результатами
             if rag_span:
-                rag_span.end(output={
+                rag_span.update(output={
                     "answer_preview": result.get("answer", "")[:100],
                     "num_docs": result.get("metrics", {}).get("num_documents_found", 0),
                     "relevance_score": result.get("metrics", {}).get("avg_relevance_score", 0.0),
                 })
+                rag_span.end()
             
             # Создать Generation для LLM вызова
             if trace:
@@ -181,10 +182,11 @@ class ChatBot:
             
             # Завершить main span
             if main_span:
-                main_span.end(output={
+                main_span.update(output={
                     "success": True,
                     "answer": result.get("answer", ""),
                 })
+                main_span.end()
             
             # Завершить trace
             monitoring.finalize_trace(trace.id, output_data={
@@ -218,9 +220,11 @@ class ChatBot:
                 
                 # Завершить spans с ошибкой
                 if rag_span:
-                    rag_span.end(output={"error": str(e)})
+                    rag_span.update(output={"error": str(e)})
+                    rag_span.end()
                 if main_span:
-                    main_span.end(output={"error": str(e)})
+                    main_span.update(output={"error": str(e)})
+                    main_span.end()
                 
                 # Завершить trace с ошибкой
                 monitoring.finalize_trace(trace.id, output_data={"error": str(e)})

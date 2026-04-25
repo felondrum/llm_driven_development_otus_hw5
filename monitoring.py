@@ -76,20 +76,20 @@ class MonitoringService:
             return None
         
         # В Langfuse v4 используем start_observation с trace_context
+        # trace_id должен быть 32-символьным hex из trace.trace_id
         span = self.client.start_observation(
             name=name,
             as_type="span",
             metadata=metadata or {},
             input=input_data,
-            trace_context={"trace_id": trace_id},
+            trace_context={"trace_id": trace.trace_id},
         )
         
         if start_time:
             span.update(start_time=start_time)
+        if output_data is not None:
+            span.update(output=output_data)
         if end_time:
-            span.end()
-        elif input_data is not None and output_data is not None:
-            # Если есть входные и выходные данные, завершаем span
             span.end()
         
         return span
@@ -113,7 +113,7 @@ class MonitoringService:
             print(f"[WARNING] Trace {trace_id} not found for generation '{name}'")
             return None
         
-        # Форматируем usage для Langfuse
+        # Форматируем usage для Langfuse v4 (используем usage_details)
         usage_details = {}
         if usage:
             if "input" in usage:
@@ -123,15 +123,17 @@ class MonitoringService:
             if "total" in usage:
                 usage_details["totalTokens"] = usage["total"]
         
+        # В Langfuse v4 используем trace.trace_id (32-символьный hex)
+        # Параметр называется usage_details, а не usage
         generation = self.client.start_observation(
             name=name,
             as_type="generation",
             model=model,
             input=prompt,
             output=completion,
-            usage=usage_details if usage_details else None,
+            usage_details=usage_details if usage_details else None,
             metadata=metadata or {},
-            trace_context={"trace_id": trace_id},
+            trace_context={"trace_id": trace.trace_id},
         )
         
         if start_time:
@@ -155,11 +157,12 @@ class MonitoringService:
             return None
         
         # В Langfuse v4 events создаются через start_observation с as_type='event'
+        # Используем trace.trace_id (32-символьный hex)
         event = self.client.start_observation(
             name=name,
             as_type="event",
             metadata=metadata or {},
-            trace_context={"trace_id": trace_id},
+            trace_context={"trace_id": trace.trace_id},
         )
         
         return event
@@ -179,9 +182,9 @@ class MonitoringService:
             print(f"[WARNING] Trace {trace_id} not found for score '{name}'")
             return
         
-        # В Langfuse v4 используем create_score
+        # В Langfuse v4 используем trace.trace_id (32-символьный hex)
         self.client.create_score(
-            trace_id=trace_id,
+            trace_id=trace.trace_id,
             name=name,
             value=value,
             comment=comment,
