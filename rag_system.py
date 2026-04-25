@@ -22,7 +22,7 @@ from llama_index.llms.ollama import Ollama
 from llama_index.core.node_parser import SentenceSplitter
 
 import config
-from monitoring import monitoring, track_operation
+from monitoring import monitoring
 
 
 @dataclass
@@ -100,7 +100,6 @@ class RAGSystem:
             similarity_top_k=config.TOP_K_RETRIEVAL,
         )
 
-    @track_operation
     def search(self, query: str, top_k: int = None) -> List[RetrievalResult]:
         """
         Поиск релевантных документов по запросу.
@@ -143,25 +142,16 @@ class RAGSystem:
             ))
 
         # Логирование в Langfuse
-        monitoring.create_event(
-            trace_id="rag-search",
-            name="documents_retrieved",
-            metadata={
-                "query": query,
-                "num_results": len(results),
-                "duration_ms": duration_ms,
-                "top_k": top_k,
-            },
-        )
+        # Убрано создание event с недопустимым trace_id "rag-search"
 
         return results
 
-    @track_operation
     def generate_answer(
         self,
         query: str,
         context_docs: List[RetrievalResult],
-    ) -> str:
+        trace_id: str = None
+    ) -> tuple:
         """
         Сгенерировать ответ на основе контекста.
         
@@ -216,27 +206,11 @@ class RAGSystem:
         output_tokens = len(answer.split())
         
         # Логирование генерации в Langfuse
-        generation = monitoring.create_generation(
-            trace_id="rag-generation",
-            name="llm_answer_generation",
-            model=config.OLLAMA_MODEL,
-            prompt=system_prompt,
-            completion=answer,
-            usage={
-                "input": input_tokens,
-                "output": output_tokens,
-                "total": input_tokens + output_tokens,
-            },
-            metadata={
-                "num_context_docs": len(context_docs),
-                "context_doc_ids": [d.doc_id for d in context_docs],
-                "duration_ms": duration_ms,
-            },
-        )
+        # Убрано создание generation с недопустимым trace_id "rag-generation"
 
-        return answer
+        return answer, input_tokens, output_tokens, trace_id
 
-    def query(self, user_query: str) -> Dict[str, Any]:
+    def query(self, user_query: str, trace_id: str = None) -> Dict[str, Any]:
         """
         Полный цикл RAG: поиск + генерация ответа.
         
@@ -252,7 +226,7 @@ class RAGSystem:
         retrieved_docs = self.search(user_query)
 
         # Генерация ответа
-        answer = self.generate_answer(user_query, retrieved_docs)
+        answer, input_tokens, output_tokens, trace_id = self.generate_answer(user_query, retrieved_docs, trace_id)
 
         end_time = time.time()
         total_duration_ms = (end_time - start_time) * 1000
@@ -277,6 +251,8 @@ class RAGSystem:
                 "total_duration_ms": total_duration_ms,
                 "input_length": len(user_query),
                 "output_length": len(answer),
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
             },
         }
 

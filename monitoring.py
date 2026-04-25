@@ -26,11 +26,18 @@ class MonitoringService:
         tags: Optional[List[str]] = None,
     ):
         """Создать новый Trace для отслеживания полного пути запроса."""
-        return self.client.trace(
+        # В Langfuse нет прямого поля user_id. Используем metadata.
+        full_metadata = (metadata or {}).copy()
+        if user_id:
+            full_metadata["user_id"] = user_id
+        if tags:
+            full_metadata["tags"] = tags
+            
+        # Langfuse v4.5.0: start_observation() создаёт trace автоматически
+        return self.client.start_observation(
             name=name,
-            user_id=user_id,
-            metadata=metadata or {},
-            tags=tags or [],
+            metadata=full_metadata,
+            as_type="span"
         )
 
     def create_span(
@@ -44,12 +51,13 @@ class MonitoringService:
         output_data: Optional[Any] = None,
     ):
         """Создать Span для отдельной операции."""
-        span = self.client.span(
-            trace_id=trace_id,
+        return self.client.start_observation(
             name=name,
             metadata=metadata or {},
             input=input_data,
             output=output_data,
+            trace_context={"trace_id": trace_id},
+            as_type="span"
         )
         if start_time:
             span.update(start_time=start_time)
@@ -70,14 +78,15 @@ class MonitoringService:
         end_time: Optional[float] = None,
     ):
         """Создать Generation для LLM вызова."""
-        generation = self.client.generation(
-            trace_id=trace_id,
+        return self.client.start_observation(
             name=name,
-            model=model,
+            metadata=metadata or {},
             input=prompt,
             output=completion,
-            usage=usage,
-            metadata=metadata or {},
+            model=model,
+            usage_details=usage,
+            trace_context={"trace_id": trace_id},
+            as_type="generation"
         )
         if start_time:
             generation.update(start_time=start_time)
@@ -92,10 +101,11 @@ class MonitoringService:
         metadata: Optional[Dict[str, Any]] = None,
     ):
         """Создать Event для точечного события."""
-        return self.client.event(
-            trace_id=trace_id,
+        return self.client.start_observation(
             name=name,
             metadata=metadata or {},
+            trace_context={"trace_id": trace_id},
+            as_type="span"
         )
 
     def score(
@@ -107,12 +117,12 @@ class MonitoringService:
         data_type: str = "NUMERIC",
     ):
         """Добавить Score (метрику качества/производительности)."""
-        return self.client.score(
+        self.client.create_score(
             trace_id=trace_id,
             name=name,
             value=value,
             comment=comment,
-            data_type=data_type,
+            data_type=data_type
         )
 
     def flush(self):
@@ -136,9 +146,9 @@ def track_llm_call(func):
     return wrapper
 
 
-def track_operation(func):
-    """Декоратор для автоматического отслеживания операций."""
-    @observe(name=func.__name__, as_type="span")
-    def wrapper(*args, **kwargs):
-        return func(*args, **kwargs)
-    return wrapper
+# def track_operation(func):
+#     """Декоратор для автоматического отслеживания операций."""
+#     @observe(name=func.__name__, as_type="span")
+#     def wrapper(*args, **kwargs):
+#         return func(*args, **kwargs)
+#     return wrapper

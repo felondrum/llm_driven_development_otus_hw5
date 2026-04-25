@@ -39,6 +39,7 @@
 docker-compose up -d
 ```
 
+
 Сервисы:
 - **Langfuse Web**: http://localhost:3000
 - **Ollama**: http://localhost:11434
@@ -50,35 +51,29 @@ docker-compose up -d
 ### 2. Установка зависимостей Python
 
 ```bash
-pip install -e .
-```
-
-Или вручную:
-```bash
-pip install langchain langchain-community langchain-ollama langfuse langgraph \
-    llama-index llama-index-embeddings-ollama llama-index-llms-ollama python-dotenv
+uv sync
 ```
 
 ### 3. Настройка окружения
 
-Скопируйте `.env.example` в `.env`:
-```bash
-cp .env.example .env
-```
+
 
 Настройте переменные окружения при необходимости.
 
 ### 4. Установка моделей Ollama
 
 ```bash
-ollama pull llama3.2
-ollama pull nomic-embed-text
+# Основная LLM
+docker exec -it ollama ollama pull qwen2.5:3b
+
+# Эмбеддинг-модель (Nomic - для векторизации документов)
+docker exec -it ollama ollama pull nomic-embed-text
 ```
 
 ## Запуск приложения
 
 ```bash
-python main.py
+uv run main.py
 ```
 
 ## Команды чат-бота

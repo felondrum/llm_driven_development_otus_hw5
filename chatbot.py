@@ -24,7 +24,14 @@ class ChatBot:
         self.conversation_history = []
         self.current_trace = None
 
-    @observe(name="chatbot_query", as_type="span")
+    def estimate_context_tokens(self) -> int:
+        """Оценить общее количество токенов в контексте (грубая оценка)."""
+        total = 0
+        for msg in self.conversation_history:
+            total += len(msg["query"]) // 4  # ~4 chars на токен
+            total += len(msg["answer"]) // 4
+        return total
+
     def process_query(self, user_input: str) -> dict:
         """
         Обработать запрос пользователя через RAG систему.
@@ -37,81 +44,142 @@ class ChatBot:
         """
         start_time = time.time()
         
-        # Создать Trace для этого запроса
-        trace = monitoring.create_trace(
-            name="user_query_processing",
-            user_id=self.user_id,
-            metadata={
-                "session_id": self.session_id,
-                "input_length": len(user_input),
-            },
-            tags=["chat", "rag"],
-        )
-        self.current_trace = trace
+        trace = None
+        span = None
+        
+        # Создать Trace для всего запроса
+        try:
+            context_tokens = self.estimate_context_tokens()
+            
+            trace = monitoring.create_trace(
+                name="user_query_processing",
+                user_id=self.user_id,
+                metadata={
+                    "session_id": self.session_id,
+                    "input_length": len(user_input),
+                    "conversation_turns": len(self.conversation_history),
+                    "estimated_context_tokens": context_tokens,
+                },
+                tags=["chat", "rag"],
+            )
+            self.current_trace = trace
+            
+            # Создать span для chatbot_query
+            span = monitoring.create_span(
+                trace_id=trace.id,
+                name="chatbot_query",
+                input_data={"query": user_input}
+            )
+            self.current_trace = trace
+            
+            # Event: начало обработки
+            try:
+                monitoring.create_event(
+                    trace_id=trace.id,
+                    name="query_received",
+                    metadata={
+                        "timestamp": datetime.now().isoformat(),
+                        "input_preview": user_input[:100],
+                    },
+                )
+            except Exception as e:
+                print(f"[WARNING] Failed to create event 'query_received': {e}")
 
-        # Event: начало обработки
-        monitoring.create_event(
-            trace_id=trace.id,
-            name="query_received",
-            metadata={
-                "timestamp": datetime.now().isoformat(),
-                "input_preview": user_input[:100],
-            },
-        )
-
-        # Span: RAG обработка
-        span = monitoring.create_span(
-            trace_id=trace.id,
-            name="rag_processing",
-            input_data={"query": user_input},
-        )
+            # Span: RAG обработка
+            try:
+                span = monitoring.create_span(
+                    trace_id=trace.id,
+                    name="rag_processing",
+                    input_data={"query": user_input},
+                )
+            except Exception as e:
+                print(f"[WARNING] Failed to create span 'rag_processing': {e}")
+        except Exception as e:
+            print(f"[ERROR] Failed to create Langfuse trace: {e}")
+            import traceback
+            traceback.print_exc()
 
         try:
             # Выполнить RAG запрос
-            result = self.rag.query(user_input)
+            result = self.rag.query(user_input, trace_id=trace.id)
             
+            # Создать Generation для LLM вызова
+            if trace:
+                try:
+                    monitoring.create_generation(
+                        trace_id=trace.id,
+                        name="llm_response_generation",
+                        model=config.OLLAMA_MODEL,
+                        prompt=user_input,
+                        completion=result["answer"],
+                        usage={
+                            "input": result["metrics"].get("input_tokens", 0),
+                            "output": result["metrics"].get("output_tokens", 0),
+                        },
+                        metadata={
+                            "input_length": result["metrics"]["input_length"],
+                            "output_length": result["metrics"]["output_length"],
+                        }
+                    )
+                except Exception as e:
+                    print(f"[WARNING] Failed to create generation: {e}")
+
             # Обновить Span с результатами
-            span.end(
-                output_data={
-                    "answer_preview": result["answer"][:100],
-                    "num_docs": result["metrics"]["num_documents_found"],
-                }
-            )
+            if span:
+                span.update(
+                    output_data={
+                        "answer_preview": result.get("answer", "")[:100],
+                        "num_docs": result.get("metrics", {}).get("num_documents_found", 0),
+                        "relevance_score": result.get("metrics", {}).get("avg_relevance_score", 0.0),
+                    }
+                )
 
             # Event: ответ сгенерирован
-            monitoring.create_event(
-                trace_id=trace.id,
-                name="response_generated",
-                metadata={
-                    "answer_length": result["metrics"]["output_length"],
-                    "documents_count": result["metrics"]["num_documents_found"],
-                },
-            )
+            if trace:
+                try:
+                    monitoring.create_event(
+                        trace_id=trace.id,
+                        name="response_generated",
+                        metadata={
+                            "answer_length": result["metrics"]["output_length"],
+                            "documents_count": result["metrics"]["num_documents_found"],
+                        },
+                    )
+                except Exception as e:
+                    print(f"[WARNING] Failed to create event 'response_generated': {e}")
 
             # Score: релевантность ответа
-            if result["metrics"]["num_documents_found"] > 0:
-                relevance_score = min(
-                    result["metrics"]["avg_relevance_score"] * 10,
-                    1.0
-                )
-                monitoring.score(
-                    trace_id=trace.id,
-                    name="relevance_score",
-                    value=relevance_score,
-                    comment="Средняя релевантность найденных документов",
-                    data_type="NUMERIC",
-                )
+            if trace and result.get("metrics", {}).get("num_documents_found", 0) > 0:
+                try:
+                    relevance_score = min(
+                        result["metrics"]["avg_relevance_score"] * 10,
+                        1.0
+                    )
+                    monitoring.score(
+                        trace_id=trace.id,
+                        name="relevance_score",
+                        value=relevance_score,
+                        comment="Средняя релевантность найденных документов",
+                        data_type="NUMERIC",
+                    )
+                except Exception as e:
+                    print(f"[WARNING] Failed to create score 'relevance_score': {e}")
 
             # Score: производительность
-            duration_ms = result["metrics"]["total_duration_ms"]
-            performance_score = max(0, 1.0 - (duration_ms / 10000))  # Штраф за долгие ответы
-            monitoring.score(
-                trace_id=trace.id,
-                name="performance_score",
-                value=performance_score,
-                comment=f"Время выполнения: {duration_ms:.2f}ms",
-                data_type="NUMERIC",
-            )
+            duration_ms = result.get("metrics", {}).get("total_duration_ms", 0)
+            if trace:
+                try:
+                    duration_ms = result["metrics"]["total_duration_ms"]
+                    performance_score = max(0, 1.0 - (duration_ms / 10000))  # Штраф за долгие ответы
+                    monitoring.score(
+                        trace_id=trace.id,
+                        name="performance_score",
+                        value=performance_score,
+                        comment=f"Время выполнения: {duration_ms:.2f}ms",
+                        data_type="NUMERIC",
+                    )
+                except Exception as e:
+                    print(f"[WARNING] Failed to create score 'performance_score': {e}")
 
             # Сохранить в историю
             self.conversation_history.append({
@@ -125,48 +193,61 @@ class ChatBot:
             total_duration = (end_time - start_time) * 1000
 
             # Финальный Score: общее качество
-            overall_score = (relevance_score + performance_score) / 2 if result["metrics"]["num_documents_found"] > 0 else 0.5
-            monitoring.score(
-                trace_id=trace.id,
-                name="overall_quality",
-                value=overall_score,
-                comment="Общее качество ответа",
-                data_type="NUMERIC",
-            )
+            if trace:
+                try:
+                    overall_score = (relevance_score + performance_score) / 2 if result.get("metrics", {}).get("num_documents_found", 0) > 0 else 0.5
+                    monitoring.score(
+                        trace_id=trace.id,
+                        name="overall_quality",
+                        value=overall_score,
+                        comment="Общее качество ответа",
+                        data_type="NUMERIC",
+                    )
+                except Exception as e:
+                    print(f"[WARNING] Failed to create score 'overall_quality': {e}")
 
-            return {
-                "success": True,
-                "answer": result["answer"],
-                "sources": result["retrieved_documents"],
-                "metrics": result["metrics"],
-                "trace_id": trace.id,
-            }
+                # Завершить span
+                if span:
+                    span.end()
+
+                return {
+                    "success": True,
+                    "answer": result.get("answer", ""),
+                    "sources": result.get("retrieved_documents", []),
+                    "metrics": result.get("metrics", {}),
+                    "trace_id": trace.id if trace else None,
+                }
 
         except Exception as e:
             # Event: ошибка
-            monitoring.create_event(
-                trace_id=trace.id,
-                name="error_occurred",
-                metadata={
-                    "error_type": type(e).__name__,
-                    "error_message": str(e),
-                },
-            )
-            
-            # Score: ошибка (0)
-            monitoring.score(
-                trace_id=trace.id,
-                name="error_flag",
-                value=0,
-                comment=f"Ошибка: {str(e)}",
-                data_type="BOOLEAN",
-            )
+            if trace:
+                try:
+                    monitoring.create_event(
+                        trace_id=trace.id,
+                        name="error_occurred",
+                        metadata={
+                            "error_type": type(e).__name__,
+                            "error_message": str(e),
+                        },
+                    )
+                except Exception as e_inner:
+                    print(f"[WARNING] Failed to create event 'error_occurred': {e_inner}")
 
-            return {
-                "success": False,
-                "error": str(e),
-                "trace_id": trace.id,
-            }
+                # Завершить span
+                if span:
+                    span.end()
+
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "trace_id": trace.id if trace else None,
+                    "metrics": {
+                        "total_duration_ms": (time.time() - start_time) * 1000,
+                        "num_documents_found": 0,
+                        "input_length": len(user_input),
+                        "output_length": 0,
+                    }
+                }
 
     def print_welcome(self):
         """Вывести приветственное сообщение."""
@@ -279,7 +360,7 @@ class ChatBot:
                 print("\n🤖 Бот: Обрабатываю запрос...")
                 result = self.process_query(user_input)
 
-                if result["success"]:
+                if result and result.get("success"):
                     print(f"\n🤖 Бот: {result['answer']}")
                     
                     if result["sources"]:
@@ -290,7 +371,8 @@ class ChatBot:
                     print(f"\n⏱️ Время: {result['metrics']['total_duration_ms']:.2f}ms | "
                           f"📄 Найдено документов: {result['metrics']['num_documents_found']}")
                 else:
-                    print(f"\n❌ Ошибка: {result.get('error', 'Неизвестная ошибка')}")
+                    error_msg = result.get('error', 'Неизвестная ошибка') if result else 'Неизвестная ошибка'
+                    print(f"\n❌ Ошибка: {error_msg}")
 
         except KeyboardInterrupt:
             print("\n\n👋 Прервано пользователем. До свидания!")
@@ -301,7 +383,6 @@ class ChatBot:
             monitoring.shutdown()
 
 
-@observe(name="main_application")
 def main():
     """Точка входа в приложение."""
     bot = ChatBot()
